@@ -1,68 +1,97 @@
-# briefme_retrieval/retrieval_models/colbert.py
-
+import torch
 import os
+import tempfile
 import shutil
-from colbert.infra import Run, RunConfig, ColBERTConfig
+from tqdm import tqdm
 from colbert import Indexer, Searcher
+from colbert.infra import Run, RunConfig, ColBERTConfig
+from colbert.data import Queries
+
 
 class ColBERTModel:
-    def __init__(self, corpus_texts, corpus_ids):
+    def __init__(self, corpus_texts, corpus_ids, batch_size=16, checkpoint="colbert-ir/colbertv2.0"):
         """
-        Initializes the ColBERT model. It will build an index if one doesn't exist,
-        otherwise it will load the existing index.
+        Initializes the ColBERT model and builds the index.
 
         Args:
             corpus_texts (list[str]): List of document texts.
             corpus_ids (list[str]): List of corresponding document IDs.
+            batch_size (int): Batch size for indexing the corpus.
+            checkpoint (str): ColBERT checkpoint to use.
         """
-        self.checkpoint = 'colbertv2.0'
-        self.index_root = 'colbert_indexes'
-        self.index_name = f'briefme.corpus.nbits-2' # Standard ColBERT naming convention
-        self.full_index_path = os.path.join(self.index_root, self.index_name)
-        
+        print("Initializing ColBERT-v2... This will download models and may take some time.")
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        print(f"Using device: {self.device}")
+
+        self.corpus_texts = corpus_texts
         self.corpus_ids = corpus_ids
+        self.batch_size = batch_size
+        self.checkpoint = checkpoint
+        
+        # Create temporary directory for ColBERT files
+        self.temp_dir = tempfile.mkdtemp(prefix="colbert_")
+        self.collection_path = os.path.join(self.temp_dir, "collection.tsv")
+        self.index_name = "corpus_index"
+        
+        # Create mapping from integer PIDs to corpus IDs
+        self.pid_to_corpus_id = {i: corpus_id for i, corpus_id in enumerate(corpus_ids)}
 
-        # --- Build or Load Index ---
-        if not os.path.exists(self.full_index_path):
-            self._build_index(corpus_texts)
-        else:
-            print(f"Loading existing ColBERT index from {self.full_index_path}")
-
-        # --- Initialize Searcher ---
-        print("Initializing ColBERT Searcher...")
-        # RunConfig is used to manage execution settings, like GPU usage
-        with Run().context(RunConfig(nranks=1, experiment="briefme")): # nranks=1 for single-GPU/CPU
-            self.searcher = Searcher(index=self.index_name, index_root=self.index_root)
+        # --- Prepare data and build index ---
+        self._prepare_collection()
+        self._build_index()
         print("ColBERT initialized successfully.")
 
-    def _build_index(self, corpus_texts):
-        """
-        Builds the ColBERT index from the corpus texts.
-        WARNING: This is a slow, resource-intensive process.
-        """
-        print("---" * 20)
-        print(f"WARNING: Building new ColBERT index at '{self.full_index_path}'.")
-        print("This is a one-time process and can be very slow (hours) and requires >20GB of disk space.")
-        print("---" * 20)
+    def _prepare_collection(self):
+        """Prepares the collection in TSV format required by ColBERT."""
+        print("Preparing collection in TSV format...")
+        with open(self.collection_path, 'w', encoding='utf-8') as f:
+            for i, text in enumerate(tqdm(self.corpus_texts, desc="Writing collection")):
+                # Clean the text: remove newlines and tabs, strip whitespace
+                cleaned_text = text.replace('\n', ' ').replace('\r', ' ').replace('\t', ' ').strip()
+                
+                # Skip empty documents
+                if not cleaned_text:
+                    cleaned_text = "[EMPTY]"
+                
+                # ColBERT expects: pid \t passage_text
+                # Use integer PIDs (0, 1, 2, ...) which we'll map back later
+                f.write(f"{i}\t{cleaned_text}\n")
+        print(f"Collection saved to {self.collection_path}")
 
-        # Clean up any potentially failed previous indexing attempts
-        shutil.rmtree(self.full_index_path, ignore_errors=True)
+    def _build_index(self):
+        """Builds a ColBERT index from the collection."""
+        print("Building ColBERT index...")
         
-        # Configure ColBERT indexing
-        # nbits=2 is a standard setting for good compression and quality
-        config = ColBERTConfig(nbits=2)
+        # Determine number of GPUs
+        n_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 1
         
-        # RunConfig controls the execution environment (e.g., number of GPUs)
-        # We'll use nranks=1 for a single GPU or CPU. If you have more GPUs, you can increase this.
-        with Run().context(RunConfig(nranks=1, experiment="briefme")):
+        with Run().context(RunConfig(nranks=n_gpus, experiment="colbert_retrieval")):
+            config = ColBERTConfig(
+                nbits=2,  # Compression level (2 or 8 typically)
+                doc_maxlen=512,  # Maximum document length
+                root=self.temp_dir,
+                index_bsize=self.batch_size,
+            )
+            
             indexer = Indexer(checkpoint=self.checkpoint, config=config)
-            indexer.index(name=self.index_name, collection=corpus_texts, overwrite=True)
-
-        print(f"Index built successfully at {self.full_index_path}")
+            indexer.index(
+                name=self.index_name,
+                collection=self.collection_path,
+                overwrite=True
+            )
+        
+        print(f"ColBERT index built with {len(self.corpus_texts)} documents.")
+        
+        # Initialize searcher
+        with Run().context(RunConfig(nranks=1, experiment="colbert_retrieval")):
+            config = ColBERTConfig(
+                root=self.temp_dir,
+            )
+            self.searcher = Searcher(index=self.index_name, config=config)
 
     def retrieve(self, query, k=100):
         """
-        Searches for a query and returns the top-k document IDs.
+        Encodes a query and retrieves the top-k document IDs from the ColBERT index.
 
         Args:
             query (str): The input query text.
@@ -71,10 +100,84 @@ class ColBERTModel:
         Returns:
             list[str]: A ranked list of the top-k retrieved document IDs.
         """
-        # The searcher returns a tuple of (passage_ids, ranks, scores)
-        # The passage_ids are the integer indices of the documents in the original collection.
-        results_pids = self.searcher.search(query, k=k)[0]
+        with Run().context(RunConfig(nranks=1, experiment="colbert_retrieval")):
+            # Search using ColBERT
+            # searcher.search returns a list of tuples: (passage_id, rank, score)
+            results = self.searcher.search(query, k=k)
+            
+            # Map integer PIDs back to original corpus IDs
+            retrieved_ids = [self.pid_to_corpus_id[pid] for pid, _, _ in results]
+            
+            return retrieved_ids
 
-        # Map the internal integer IDs back to our original citation_value IDs
-        retrieved_ids = [self.corpus_ids[pid] for pid in results_pids]
-        return retrieved_ids
+    def retrieve_with_scores(self, query, k=100):
+        """
+        Encodes a query and retrieves the top-k document IDs with their scores.
+
+        Args:
+            query (str): The input query text.
+            k (int): The number of documents to retrieve.
+
+        Returns:
+            list[tuple]: A list of tuples (document_id, score) ranked by score.
+        """
+        with Run().context(RunConfig(nranks=1, experiment="colbert_retrieval")):
+            results = self.searcher.search(query, k=k)
+            
+            # Map PIDs to corpus IDs and include scores
+            retrieved_with_scores = [
+                (self.pid_to_corpus_id[pid], score) 
+                for pid, _, score in results
+            ]
+            
+            return retrieved_with_scores
+
+    def batch_retrieve(self, queries, k=100):
+        """
+        Retrieves top-k documents for multiple queries efficiently.
+
+        Args:
+            queries (list[str]): List of query texts.
+            k (int): The number of documents to retrieve per query.
+
+        Returns:
+            list[list[str]]: A list where each element is a ranked list of document IDs for a query.
+        """
+        # Create temporary queries file
+        queries_path = os.path.join(self.temp_dir, "queries_temp.tsv")
+        with open(queries_path, 'w', encoding='utf-8') as f:
+            for i, query in enumerate(queries):
+                f.write(f"{i}\t{query}\n")
+        
+        with Run().context(RunConfig(nranks=1, experiment="colbert_retrieval")):
+            # Load queries
+            queries_obj = Queries(queries_path)
+            
+            # Search all queries
+            ranking = self.searcher.search_all(queries_obj, k=k)
+            
+            # Parse results
+            results = []
+            for qid in range(len(queries)):
+                query_results = ranking.data.get(qid, [])
+                retrieved_ids = [self.pid_to_corpus_id[pid] for pid, _, _ in query_results]
+                results.append(retrieved_ids)
+        
+        # Clean up temporary queries file
+        if os.path.exists(queries_path):
+            os.remove(queries_path)
+        
+        return results
+
+    def cleanup(self):
+        """Removes temporary files and directories created by ColBERT."""
+        if os.path.exists(self.temp_dir):
+            shutil.rmtree(self.temp_dir)
+            print(f"Cleaned up temporary directory: {self.temp_dir}")
+
+    def __del__(self):
+        """Cleanup on deletion."""
+        try:
+            self.cleanup()
+        except:
+            pass

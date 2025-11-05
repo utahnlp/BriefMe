@@ -56,7 +56,7 @@ def main():
     if args.method == "bm25":
         model = BM25Model(corpus_texts, corpus_ids)
     elif args.method == "colbert":
-        model = ColbertModel(corpus_texts, corpus_ids)
+        model = ColBERTModel(corpus_texts, corpus_ids)
     elif args.method == "dpr":
         model = DPRModel(corpus_texts, corpus_ids)
     else:
