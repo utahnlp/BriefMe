@@ -1,5 +1,3 @@
-# briefme_retrieval/main.py
-
 import argparse
 from tqdm import tqdm
 from data_loader import load_briefme_data
@@ -7,6 +5,9 @@ from retrieval_models.bm25_model import BM25Model
 from retrieval_models.dpr_model import DPRModel
 from retrieval_models.colbert_model import ColBERTModel
 from evaluation import evaluate
+import os
+os.environ['COLBERT_LOAD_TORCH_EXTENSION_VERBOSE'] = 'False'
+
 
 def main():
     parser = argparse.ArgumentParser(description="BriefMe Case Retrieval")
