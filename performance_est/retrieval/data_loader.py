@@ -1,7 +1,7 @@
 
 from datasets import load_dataset
 
-def load_briefme_dataset(split='test'):
+def load_briefme_data(split='test'):
     """
     Loads a specific split of the BriefMe 'case_retrieval' subset.
 
@@ -33,7 +33,7 @@ def load_briefme_dataset(split='test'):
 
 if __name__ == '__main__':
     # Example usage
-    test_queries, test_corpus = load_briefme_dataset('test')
+    test_queries, test_corpus = load_briefme_data('test')
     if test_queries and test_corpus:
         print(f"Loaded {len(test_queries)} queries from the 'test' split.")
         print(f"Loaded {len(test_corpus)} documents in the corpus.")
