@@ -4,6 +4,7 @@ import argparse
 from tqdm import tqdm
 from data_loader import load_briefme_data
 from retrieval_models.bm25_model import BM25Model
+from retrieval_models.dpr_model import DPRModel
 from retrieval_models.colbert_model import ColbertModel
 from evaluation import evaluate
 
@@ -12,7 +13,7 @@ def main():
     parser.add_argument(
         "--method",
         type=str,
-        choices=["bm25", "colbert"],
+        choices=["bm25", "dpr", "colbert"],
         default="bm25",
         help="Retrieval method to use."
     )
@@ -56,6 +57,8 @@ def main():
         model = BM25Model(corpus_texts, corpus_ids)
     elif args.method == "colbert":
         model = ColbertModel(corpus_texts, corpus_ids)
+    elif args.method == "dpr":
+        model = DPRModel(corpus_texts, corpus_ids)
     else:
         raise ValueError("Invalid method specified.")
 
