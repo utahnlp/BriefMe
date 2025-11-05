@@ -2,3 +2,7 @@ datasets
 rank-bm25
 numpy
 tqdm
+torch
+transformers
+faiss-cpu
+colbert-ai

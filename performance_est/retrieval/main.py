@@ -5,7 +5,7 @@ from tqdm import tqdm
 from data_loader import load_briefme_data
 from retrieval_models.bm25_model import BM25Model
 from retrieval_models.dpr_model import DPRModel
-from retrieval_models.colbert_model import ColbertModel
+from retrieval_models.colbert_model import ColBERTModel
 from evaluation import evaluate
 
 def main():
