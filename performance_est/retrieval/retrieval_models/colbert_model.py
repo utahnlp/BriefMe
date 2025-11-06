@@ -3,6 +3,7 @@ import os
 import tempfile
 import shutil
 from tqdm import tqdm
+
 from colbert import Indexer, Searcher
 from colbert.infra import Run, RunConfig, ColBERTConfig
 from colbert.data import Queries
@@ -102,11 +103,24 @@ class ColBERTModel:
         """
         with Run().context(RunConfig(nranks=1, experiment="colbert_retrieval")):
             # Search using ColBERT
-            # searcher.search returns a list of tuples: (passage_id, rank, score)
+            # searcher.search returns ranking object, need to extract results
             results = self.searcher.search(query, k=k)
             
-            # Map integer PIDs back to original corpus IDs
-            retrieved_ids = [self.pid_to_corpus_id[pid] for pid, _, _ in results]
+            # Results format varies - handle both tuple and direct pid formats
+            retrieved_ids = []
+            for item in results:
+                # Handle different return formats from ColBERT
+                if isinstance(item, tuple):
+                    if len(item) == 3:
+                        pid, rank, score = item
+                    elif len(item) == 2:
+                        pid, score = item
+                    else:
+                        pid = item[0]
+                else:
+                    pid = item
+                
+                retrieved_ids.append(self.pid_to_corpus_id[pid])
             
             return retrieved_ids
 
@@ -125,10 +139,22 @@ class ColBERTModel:
             results = self.searcher.search(query, k=k)
             
             # Map PIDs to corpus IDs and include scores
-            retrieved_with_scores = [
-                (self.pid_to_corpus_id[pid], score) 
-                for pid, _, score in results
-            ]
+            retrieved_with_scores = []
+            for item in results:
+                # Handle different return formats
+                if isinstance(item, tuple):
+                    if len(item) == 3:
+                        pid, rank, score = item
+                    elif len(item) == 2:
+                        pid, score = item
+                    else:
+                        pid = item[0]
+                        score = 0.0
+                else:
+                    pid = item
+                    score = 0.0
+                
+                retrieved_with_scores.append((self.pid_to_corpus_id[pid], score))
             
             return retrieved_with_scores
 
@@ -160,7 +186,14 @@ class ColBERTModel:
             results = []
             for qid in range(len(queries)):
                 query_results = ranking.data.get(qid, [])
-                retrieved_ids = [self.pid_to_corpus_id[pid] for pid, _, _ in query_results]
+                # Handle different result formats
+                retrieved_ids = []
+                for item in query_results:
+                    if isinstance(item, tuple):
+                        pid = item[0]
+                    else:
+                        pid = item
+                    retrieved_ids.append(self.pid_to_corpus_id[pid])
                 results.append(retrieved_ids)
         
         # Clean up temporary queries file
