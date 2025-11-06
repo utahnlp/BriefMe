@@ -102,27 +102,29 @@ class ColBERTModel:
             list[str]: A ranked list of the top-k retrieved document IDs.
         """
         with Run().context(RunConfig(nranks=1, experiment="colbert_retrieval")):
-            # Search using ColBERT
-            # searcher.search returns ranking object, need to extract results
             results = self.searcher.search(query, k=k)
-            
-            # Results format varies - handle both tuple and direct pid formats
+
             retrieved_ids = []
             for item in results:
-                # Handle different return formats from ColBERT
-                if isinstance(item, tuple):
-                    if len(item) == 3:
-                        pid, rank, score = item
-                    elif len(item) == 2:
-                        pid, score = item
+                # Handle nested list or tuple outputs robustly
+                if isinstance(item, (list, tuple)):
+                    # Flatten if ColBERT returns [pid] or [[pid]]
+                    if isinstance(item[0], (list, tuple)):
+                        pid = item[0][0]
                     else:
                         pid = item[0]
                 else:
                     pid = item
-                
+
+                # Ensure PID is an int before lookup
+                if isinstance(pid, list):
+                    pid = pid[0]
+                pid = int(pid)
+
                 retrieved_ids.append(self.pid_to_corpus_id[pid])
-            
+
             return retrieved_ids
+
 
     def retrieve_with_scores(self, query, k=100):
         """
@@ -137,25 +139,26 @@ class ColBERTModel:
         """
         with Run().context(RunConfig(nranks=1, experiment="colbert_retrieval")):
             results = self.searcher.search(query, k=k)
-            
-            # Map PIDs to corpus IDs and include scores
+
             retrieved_with_scores = []
             for item in results:
-                # Handle different return formats
-                if isinstance(item, tuple):
-                    if len(item) == 3:
-                        pid, rank, score = item
-                    elif len(item) == 2:
-                        pid, score = item
+                if isinstance(item, (list, tuple)):
+                    if isinstance(item[0], (list, tuple)):
+                        pid = item[0][0]
+                        score = item[1] if len(item) > 1 else 0.0
                     else:
                         pid = item[0]
-                        score = 0.0
+                        score = item[1] if len(item) > 1 else 0.0
                 else:
                     pid = item
                     score = 0.0
-                
-                retrieved_with_scores.append((self.pid_to_corpus_id[pid], score))
-            
+
+                if isinstance(pid, list):
+                    pid = pid[0]
+                pid = int(pid)
+
+                retrieved_with_scores.append((self.pid_to_corpus_id[pid], float(score)))
+
             return retrieved_with_scores
 
     def batch_retrieve(self, queries, k=100):
