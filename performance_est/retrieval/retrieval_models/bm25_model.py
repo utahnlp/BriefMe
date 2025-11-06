@@ -1,5 +1,3 @@
-# briefme_retrieval/retrieval_models/bm25.py
-
 from rank_bm25 import BM25Okapi
 from tqdm import tqdm
 
