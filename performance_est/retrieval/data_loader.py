@@ -21,9 +21,10 @@ def load_briefme_data(split='test'):
         queries = dataset
         print("Queries are loaded\n-----------------------")
 
-        # corpus_dataset = load_dataset("jw4202/BriefMe", name="retrieval_corpus", split='train')
-        # corpus_dataset = load_dataset('json', data_files='downloaded_dataset/retrieval_dataset_fixed.jsonl', split='train')
-        corpus_dataset = load_dataset('json', data_files='downloaded_dataset/small_corpus.jsonl', split='train')
+        corpus_dataset = load_dataset("jw4202/BriefMe", name="retrieval_corpus", split='train')
+        # For test run on a small corpus, use the following line
+        #corpus_dataset = load_dataset('json', data_files='downloaded_dataset/small_corpus.jsonl', split='train')
+        
         # corpus = [doc['cited_text'] for doc in corpus_dataset]
         corpus= corpus_dataset
         return queries, corpus
